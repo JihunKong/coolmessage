@@ -1,50 +1,35 @@
-# 민감한 정보 파일들
+# 환경 설정 파일 (민감한 정보 포함)
 .env
+
+# Google API 인증 파일들
 credentials.json
 token.pickle
+
+# 프로그램 상태 파일들
 last_processed.txt
 
-# Python 관련
+# 로그 파일들
+*.log
+*.log.*
+*.log.backup_*
+
+# Python 캐시 파일들
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
+
+# 배포 파일들
+*.spec
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
 
-# 가상환경
-venv/
-env/
-ENV/
-
-# IDE 관련
+# IDE 설정 파일들
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# 로그 파일
-*.log
-
-# 임시 파일
+# 임시 파일들
 *.tmp
 *.temp
-coolmessenger_task.xml
+~*

@@ -16,6 +16,7 @@ import threading
 import argparse
 from startup_manager import WindowsStartupManager
 from dotenv import load_dotenv
+import logging
 try:
     from system_tray import SystemTrayApp
     TRAY_AVAILABLE = True
@@ -24,8 +25,31 @@ except ImportError:
     print("⚠️ 시스템 트레이 기능을 사용하려면 pystray와 Pillow를 설치하세요:")
     print("pip install pystray Pillow")
 
-# .env 파일 로드
+# 환경 변수 로드
 load_dotenv()
+
+# 로깅 설정
+def setup_logging():
+    """로깅 설정"""
+    log_format = '%(asctime)s - %(levelname)s - %(message)s'
+    
+    # 로그 파일과 콘솔 모두에 출력
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[
+            logging.FileHandler('coolmessenger.log', encoding='utf-8'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    # 외부 라이브러리 로그 레벨 조정
+    logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.ERROR)
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+    
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
 
 class CoolMessengerProcessor:
     def __init__(self, db_path, openai_api_key):
@@ -58,20 +82,20 @@ class CoolMessengerProcessor:
                 creds.refresh(Request())
             else:
                 if not os.path.exists(credentials_file):
-                    print(f"❌ Google API 인증 파일({credentials_file})이 없습니다!")
-                    print("Google Cloud Console에서 OAuth 2.0 클라이언트 ID를 생성하고")
-                    print(f"'{credentials_file}' 파일을 프로젝트 폴더에 저장하세요.")
+                    logger.error(f"Google API 인증 파일({credentials_file})이 없습니다!")
+                    logger.error("Google Cloud Console에서 OAuth 2.0 클라이언트 ID를 생성하고")
+                    logger.error(f"'{credentials_file}' 파일을 프로젝트 폴더에 저장하세요.")
                     return
                 
                 flow = InstalledAppFlow.from_client_secrets_file(
                     credentials_file, SCOPES)
                 
-                print("브라우저에서 Google 로그인을 완료한 후,")
-                print("주소창의 전체 URL을 복사해서 아래에 붙여넣으세요:")
-                print("(http://localhost:포트번호/?state=...&code=...&scope=... 형태)")
+                logger.info("브라우저에서 Google 로그인을 완료한 후,")
+                logger.info("주소창의 전체 URL을 복사해서 아래에 붙여넣으세요:")
+                logger.info("(http://localhost:포트번호/?state=...&code=...&scope=... 형태)")
                 
                 auth_url, _ = flow.authorization_url(prompt='consent')
-                print(f"\n인증 URL: {auth_url}\n")
+                logger.info(f"\n인증 URL: {auth_url}\n")
                 
                 # 사용자로부터 URL 입력받기
                 full_url = input("전체 URL 입력: ").strip()
@@ -133,7 +157,7 @@ class CoolMessengerProcessor:
             return result - 1  # 해당 메시지부터 포함하기 위해 -1
             
         except Exception as e:
-            print(f"오늘 메시지 키 조회 오류: {e}")
+            logger.error(f"오늘 메시지 키 조회 오류: {e}")
             return 0
     
     def save_last_message_key(self, message_key):
@@ -165,7 +189,7 @@ class CoolMessengerProcessor:
             return messages
             
         except Exception as e:
-            print(f"데이터베이스 오류: {e}")
+            logger.error(f"데이터베이스 오류: {e}")
             return []
     
     def analyze_message_with_ai(self, message_text, sender, title):
@@ -218,7 +242,7 @@ class CoolMessengerProcessor:
             )
             
             result = response.choices[0].message.content.strip()
-            print(f"🤖 AI 원본 응답: {result}")
+            logger.info(f"🤖 AI 원본 응답: {result}")
             
             # JSON 파싱 시도
             try:
@@ -228,7 +252,7 @@ class CoolMessengerProcessor:
                 if parsed_result.get('date') or parsed_result.get('deadline'):
                     if parsed_result['type'] == 'todo':
                         parsed_result['type'] = 'calendar'
-                        print("📅 날짜 발견 → 자동으로 캘린더로 변경")
+                        logger.info("📅 날짜 발견 → 자동으로 캘린더로 변경")
                 
                 return parsed_result
                 
@@ -243,8 +267,8 @@ class CoolMessengerProcessor:
                     raise ValueError("JSON 형식을 찾을 수 없음")
             
         except Exception as e:
-            print(f"AI 분석 오류: {e}")
-            print(f"응답 내용: {result if 'result' in locals() else 'N/A'}")
+            logger.error(f"AI 분석 오류: {e}")
+            logger.error(f"응답 내용: {result if 'result' in locals() else 'N/A'}")
             
             # 오류 발생시 기본값 반환 (캘린더 우선)
             return {
@@ -282,10 +306,10 @@ class CoolMessengerProcessor:
             
             event = self.calendar_service.events().insert(
                 calendarId='primary', body=event).execute()
-            print(f"캘린더 일정 추가됨: {event_data['title']}")
+            logger.info(f"캘린더 일정 추가됨: {event_data['title']}")
             
         except Exception as e:
-            print(f"캘린더 추가 오류: {e}")
+            logger.error(f"캘린더 추가 오류: {e}")
     
     def add_to_tasks(self, task_data):
         """Google Tasks에 할일 추가"""
@@ -300,10 +324,10 @@ class CoolMessengerProcessor:
             
             result = self.tasks_service.tasks().insert(
                 tasklist='@default', body=task).execute()
-            print(f"할일 추가됨: {task_data['title']}")
+            logger.info(f"할일 추가됨: {task_data['title']}")
             
         except Exception as e:
-            print(f"할일 추가 오류: {e}")
+            logger.error(f"할일 추가 오류: {e}")
     
     def process_new_messages(self):
         """새로운 메시지들 처리"""
@@ -320,31 +344,31 @@ class CoolMessengerProcessor:
             if not content:
                 continue
             
-            print(f"새 메시지 처리: {sender} - {title}")
-            print(f"받은 날짜: {receive_date}")
-            print(f"메시지 유형: {msg_type}")
+            logger.info(f"새 메시지 처리: {sender} - {title}")
+            logger.info(f"받은 날짜: {receive_date}")
+            logger.info(f"메시지 유형: {msg_type}")
             
             # AI로 메시지 분석
             analysis = self.analyze_message_with_ai(content, sender, title)
             
             if analysis and isinstance(analysis, dict):
-                print(f"✅ AI 분석 결과: {analysis.get('type', 'unknown')} - {analysis.get('title', 'No Title')}")
+                logger.info(f"✅ AI 분석 결과: {analysis.get('type', 'unknown')} - {analysis.get('title', 'No Title')}")
                 
                 if analysis.get('type') == 'calendar':
                     self.add_to_calendar(analysis)
                 elif analysis.get('type') == 'todo':
                     self.add_to_tasks(analysis)
                 elif analysis.get('type') == 'info':
-                    print(f"📋 정보성 메시지로 분류: {analysis.get('title', 'No Title')}")
+                    logger.info(f"📋 정보성 메시지로 분류: {analysis.get('title', 'No Title')}")
                     
                 # 중요한 메시지나 파일이 첨부된 경우 로그 남기기
                 if file_path or analysis.get('priority') == 'high':
-                    print(f"📎 첨부파일: {file_path}" if file_path else "⚠️ 중요 메시지")
+                    logger.info(f"📎 첨부파일: {file_path}" if file_path else "⚠️ 중요 메시지")
             else:
-                print(f"❌ AI 분석 실패 또는 잘못된 형식")
-                print(f"분석 결과: {analysis}")
+                logger.error(f"❌ AI 분석 실패 또는 잘못된 형식")
+                logger.error(f"분석 결과: {analysis}")
             
-            print("-" * 50)  # 구분선
+            logger.info("-" * 50)  # 구분선
             
             # 처리된 메시지 키 업데이트
             self.last_message_key = message_key
@@ -369,8 +393,8 @@ class DatabaseWatcher(FileSystemEventHandler):
             # 중복 이벤트 방지 (1초 내 중복 이벤트 무시)
             if current_time - self.last_modified > 1:
                 self.last_modified = current_time
-                print(f"📝 데이터베이스 변경 감지: {event.src_path}")
-                print(f"⏰ {datetime.now().strftime('%H:%M:%S')} - 새 메시지 처리 중...")
+                logger.info(f"📝 데이터베이스 변경 감지: {event.src_path}")
+                logger.info(f"⏰ {datetime.now().strftime('%H:%M:%S')} - 새 메시지 처리 중...")
                 
                 # 잠시 대기 후 처리 (파일 쓰기 완료 대기)
                 time.sleep(0.5)
@@ -402,22 +426,22 @@ def main():
     
     # 설정 검증
     if not OPENAI_API_KEY or OPENAI_API_KEY == "your-openai-api-key-here":
-        print("❌ OpenAI API 키를 설정해주세요!")
-        print("1. .env 파일을 열어서 OPENAI_API_KEY를 설정하거나")
-        print("2. .env.example을 .env로 복사하고 실제 값으로 변경하세요.")
+        logger.error("❌ OpenAI API 키를 설정해주세요!")
+        logger.error("1. .env 파일을 열어서 OPENAI_API_KEY를 설정하거나")
+        logger.error("2. .env.example을 .env로 복사하고 실제 값으로 변경하세요.")
         return
     
     if not os.path.exists(DB_PATH) and DB_PATH != '.UDB-LOCATION':
-        print(f"❌ 쿨메신저 데이터베이스 파일을 찾을 수 없습니다: {DB_PATH}")
-        print(".env 파일에서 UDB_PATH를 올바른 경로로 설정하세요.")
+        logger.error(f"❌ 쿨메신저 데이터베이스 파일을 찾을 수 없습니다: {DB_PATH}")
+        logger.error(".env 파일에서 UDB_PATH를 올바른 경로로 설정하세요.")
         return
     
     if not args.background:
-        print("=== 쿨메신저 AI 자동화 프로그램 시작 ===")
-        print(f"📅 오늘 ({datetime.now().strftime('%Y-%m-%d')})부터 메시지 처리를 시작합니다.")
-        print("📋 캘린더 우선 모드로 설정되었습니다.")
-        print(f"📁 데이터베이스: {DB_PATH}")
-        print("-" * 50)
+        logger.info("=== 쿨메신저 AI 자동화 프로그램 시작 ===")
+        logger.info(f"📅 오늘 ({datetime.now().strftime('%Y-%m-%d')})부터 메시지 처리를 시작합니다.")
+        logger.info("📋 캘린더 우선 모드로 설정되었습니다.")
+        logger.info(f"📁 데이터베이스: {DB_PATH}")
+        logger.info("-" * 50)
 
     # 프로세서 초기화
     processor = CoolMessengerProcessor(DB_PATH, OPENAI_API_KEY)
@@ -436,8 +460,8 @@ def main():
     
     # 프로그램 시작
     if not args.background:
-        print("🚀 쿨메신저 AI 자동화 프로그램 시작...")
-        print(f"👀 감시 디렉토리: {watch_dir}")
+        logger.info("🚀 쿨메신저 AI 자동화 프로그램 시작...")
+        logger.info(f"👀 감시 디렉토리: {watch_dir}")
     
     # 기존 메시지 처리 (처음 실행시)
     processor.process_new_messages()
@@ -450,7 +474,7 @@ def main():
         tray_app = SystemTrayApp(processor)
         tray_thread = threading.Thread(target=tray_app.run_tray, daemon=True)
         tray_thread.start()
-        print("📍 시스템 트레이에서 실행 중...")
+        logger.info("📍 시스템 트레이에서 실행 중...")
     
     try:
         if args.background:
@@ -468,7 +492,7 @@ def main():
     except KeyboardInterrupt:
         observer.stop()
         if not args.background:
-            print("\n🛑 프로그램 종료")
+            logger.info("\n🛑 프로그램 종료")
     
     observer.join()
 

@@ -299,3 +299,96 @@ chcp 65001
 ### 지원
 
 문제가 있거나 질문이 있으시면 [Issues](https://github.com/your-username/coolmessage/issues)에 등록해주세요.
+
+## 📊 로그 확인 및 관리
+
+### 로그 파일 위치
+프로그램 실행 시 `coolmessenger.log` 파일이 자동으로 생성됩니다.
+
+### 로그 확인 방법
+
+#### 1. 간편한 방법 (Windows 배치 파일)
+```bash
+# view_logs.bat 실행
+view_logs.bat
+```
+
+메뉴에서 원하는 옵션 선택:
+- 최근 로그 보기
+- 실시간 로그 모니터링  
+- 에러 로그만 보기
+- 오늘 로그만 보기
+- 로그 파일 통계
+- 로그 파일 정리
+
+#### 2. 명령어로 직접 확인
+```bash
+# 최근 50줄 로그 확인
+python log_viewer.py
+
+# 실시간 로그 모니터링
+python log_viewer.py --follow
+
+# 에러 로그만 확인
+python log_viewer.py --level ERROR
+
+# 특정 날짜 로그 확인
+python log_viewer.py --date 2024-01-15
+
+# 키워드로 로그 검색
+python log_viewer.py --keyword "Google"
+
+# 로그 파일 통계
+python log_viewer.py --stats
+
+# 로그 파일 정리 (백업 후)
+python log_viewer.py --clear
+```
+
+#### 3. 텍스트 에디터로 직접 확인
+```bash
+# 메모장으로 열기
+notepad coolmessenger.log
+
+# VS Code로 열기 (설치된 경우)
+code coolmessenger.log
+```
+
+### 로그 레벨 설명
+
+- **INFO**: 일반적인 프로그램 동작 정보
+  - 메시지 처리 상황
+  - AI 분석 결과
+  - 캘린더/할일 추가 성공
+
+- **WARNING**: 주의가 필요한 상황
+  - API 응답 지연
+  - 파일 접근 권한 문제
+
+- **ERROR**: 오류 상황
+  - API 키 오류
+  - 파일 경로 오류
+  - 네트워크 연결 문제
+
+### 로그 관리 팁
+
+#### 로그 파일 크기 관리
+로그 파일이 너무 커지면 성능에 영향을 줄 수 있습니다:
+
+```bash
+# 로그 파일 크기 확인
+python log_viewer.py --stats
+
+# 로그 파일 정리 (백업 후 새로 시작)
+python log_viewer.py --clear
+```
+
+#### 문제 해결을 위한 로그 활용
+1. **에러 발생 시**: `python log_viewer.py --level ERROR`
+2. **특정 기능 문제**: `python log_viewer.py --keyword "Google"` 또는 `--keyword "OpenAI"`
+3. **성능 문제**: `python log_viewer.py --follow`로 실시간 모니터링
+
+#### 로그 백업
+중요한 로그는 자동으로 백업됩니다:
+- 로그 정리 시 `coolmessenger.log.backup_YYYYMMDD_HHMMSS` 형태로 저장
+- 필요시 백업 파일을 참조하여 과거 로그 확인 가능
