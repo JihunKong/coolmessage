@@ -12,6 +12,20 @@ from openai import OpenAI
 import pickle
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+import threading
+import argparse
+from startup_manager import WindowsStartupManager
+from dotenv import load_dotenv
+try:
+    from system_tray import SystemTrayApp
+    TRAY_AVAILABLE = True
+except ImportError:
+    TRAY_AVAILABLE = False
+    print("⚠️ 시스템 트레이 기능을 사용하려면 pystray와 Pillow를 설치하세요:")
+    print("pip install pystray Pillow")
+
+# .env 파일 로드
+load_dotenv()
 
 class CoolMessengerProcessor:
     def __init__(self, db_path, openai_api_key):
@@ -32,6 +46,8 @@ class CoolMessengerProcessor:
             'https://www.googleapis.com/auth/tasks.readonly'    # 읽기 전용으로 시작
         ]
         
+        credentials_file = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials.json')
+        
         creds = None
         if os.path.exists('token.pickle'):
             with open('token.pickle', 'rb') as token:
@@ -41,8 +57,14 @@ class CoolMessengerProcessor:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
+                if not os.path.exists(credentials_file):
+                    print(f"❌ Google API 인증 파일({credentials_file})이 없습니다!")
+                    print("Google Cloud Console에서 OAuth 2.0 클라이언트 ID를 생성하고")
+                    print(f"'{credentials_file}' 파일을 프로젝트 폴더에 저장하세요.")
+                    return
+                
                 flow = InstalledAppFlow.from_client_secrets_file(
-                    'credentials.json', SCOPES)
+                    credentials_file, SCOPES)
                 
                 print("브라우저에서 Google 로그인을 완료한 후,")
                 print("주소창의 전체 URL을 복사해서 아래에 붙여넣으세요:")
@@ -335,39 +357,87 @@ class DatabaseWatcher(FileSystemEventHandler):
     """데이터베이스 파일 변경 감지"""
     def __init__(self, processor):
         self.processor = processor
-    
+        self.last_modified = 0
+        
     def on_modified(self, event):
+        if event.is_directory:
+            return
+            
+        # .udb 파일만 감지
         if event.src_path.endswith('.udb'):
-            print("쿨메신저 데이터베이스 업데이트 감지!")
-            time.sleep(2)  # 파일 쓰기 완료 대기
-            self.processor.process_new_messages()
+            current_time = time.time()
+            # 중복 이벤트 방지 (1초 내 중복 이벤트 무시)
+            if current_time - self.last_modified > 1:
+                self.last_modified = current_time
+                print(f"📝 데이터베이스 변경 감지: {event.src_path}")
+                print(f"⏰ {datetime.now().strftime('%H:%M:%S')} - 새 메시지 처리 중...")
+                
+                # 잠시 대기 후 처리 (파일 쓰기 완료 대기)
+                time.sleep(0.5)
+                self.processor.process_new_messages()
 
 def main():
-    # 설정
-    DB_PATH = r".UDB-LOCATION"
-    OPENAI_API_KEY = "your-openai-api-key"  # 실제 API 키로 교체
+    parser = argparse.ArgumentParser(description='CoolMessenger AI 자동화')
+    parser.add_argument('--setup-startup', action='store_true', help='윈도우 시작 프로그램 설정')
+    parser.add_argument('--remove-startup', action='store_true', help='윈도우 시작 프로그램 제거')
+    parser.add_argument('--background', action='store_true', help='백그라운드 모드로 실행')
+    parser.add_argument('--no-tray', action='store_true', help='시스템 트레이 비활성화')
     
-    # API 키 확인
-    if OPENAI_API_KEY == "your-openai-api-key":
-        print("❌ OpenAI API 키를 설정해주세요!")
-        print("OPENAI_API_KEY 변수에 실제 API 키를 입력하세요.")
+    args = parser.parse_args()
+    
+    # 시작 프로그램 관리
+    startup_manager = WindowsStartupManager("CoolMessenger", __file__)
+    
+    if args.setup_startup:
+        startup_manager.add_to_startup()
         return
     
-    print("=== 쿨메신저 AI 자동화 프로그램 시작 ===")
-    print(f"📅 오늘 ({datetime.now().strftime('%Y-%m-%d')})부터 메시지 처리를 시작합니다.")
-    print("📋 캘린더 우선 모드로 설정되었습니다.")
-    print("-" * 50)
+    if args.remove_startup:
+        startup_manager.remove_from_startup()
+        return
     
+    # .env 파일에서 설정 읽기
+    DB_PATH = os.getenv('UDB_PATH', '.UDB-LOCATION')
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    
+    # 설정 검증
+    if not OPENAI_API_KEY or OPENAI_API_KEY == "your-openai-api-key-here":
+        print("❌ OpenAI API 키를 설정해주세요!")
+        print("1. .env 파일을 열어서 OPENAI_API_KEY를 설정하거나")
+        print("2. .env.example을 .env로 복사하고 실제 값으로 변경하세요.")
+        return
+    
+    if not os.path.exists(DB_PATH) and DB_PATH != '.UDB-LOCATION':
+        print(f"❌ 쿨메신저 데이터베이스 파일을 찾을 수 없습니다: {DB_PATH}")
+        print(".env 파일에서 UDB_PATH를 올바른 경로로 설정하세요.")
+        return
+    
+    if not args.background:
+        print("=== 쿨메신저 AI 자동화 프로그램 시작 ===")
+        print(f"📅 오늘 ({datetime.now().strftime('%Y-%m-%d')})부터 메시지 처리를 시작합니다.")
+        print("📋 캘린더 우선 모드로 설정되었습니다.")
+        print(f"📁 데이터베이스: {DB_PATH}")
+        print("-" * 50)
+
     # 프로세서 초기화
     processor = CoolMessengerProcessor(DB_PATH, OPENAI_API_KEY)
     
     # 파일 변경 감지 설정
     event_handler = DatabaseWatcher(processor)
     observer = Observer()
-    observer.schedule(event_handler, os.path.dirname(DB_PATH), recursive=False)
+    
+    # .udb 파일이 있는 디렉토리 감시
+    if os.path.exists(DB_PATH):
+        watch_dir = os.path.dirname(os.path.abspath(DB_PATH))
+    else:
+        watch_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    observer.schedule(event_handler, watch_dir, recursive=False)
     
     # 프로그램 시작
-    print("쿨메신저 AI 자동화 프로그램 시작...")
+    if not args.background:
+        print("🚀 쿨메신저 AI 자동화 프로그램 시작...")
+        print(f"👀 감시 디렉토리: {watch_dir}")
     
     # 기존 메시지 처리 (처음 실행시)
     processor.process_new_messages()
@@ -375,13 +445,30 @@ def main():
     # 파일 감시 시작
     observer.start()
     
+    # 시스템 트레이 실행 (백그라운드 모드)
+    if args.background and TRAY_AVAILABLE and not args.no_tray:
+        tray_app = SystemTrayApp(processor)
+        tray_thread = threading.Thread(target=tray_app.run_tray, daemon=True)
+        tray_thread.start()
+        print("📍 시스템 트레이에서 실행 중...")
+    
     try:
-        while True:
-            time.sleep(60)  # 1분마다 체크
-            processor.process_new_messages()
+        if args.background:
+            # 백그라운드 모드: 무한 대기
+            while True:
+                time.sleep(300)  # 5분마다 체크
+                # 주기적으로 메시지 확인 (파일 감지 실패 대비)
+                processor.process_new_messages()
+        else:
+            # 일반 모드: 1분마다 체크
+            while True:
+                time.sleep(60)
+                processor.process_new_messages()
+                
     except KeyboardInterrupt:
         observer.stop()
-        print("프로그램 종료")
+        if not args.background:
+            print("\n🛑 프로그램 종료")
     
     observer.join()
 
