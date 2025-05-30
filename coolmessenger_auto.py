@@ -344,7 +344,7 @@ class DatabaseWatcher(FileSystemEventHandler):
 
 def main():
     # 설정
-    DB_PATH = r"C:\Users\2학년교무부장\AppData\Local\CoolMessenger\Memo\공지전.udb"
+    DB_PATH = r".UDB-LOCATION"
     OPENAI_API_KEY = "your-openai-api-key"  # 실제 API 키로 교체
     
     # API 키 확인
