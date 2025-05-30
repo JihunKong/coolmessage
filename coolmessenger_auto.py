@@ -73,11 +73,45 @@ class CoolMessengerProcessor:
         self.tasks_service = build('tasks', 'v1', credentials=creds)
     
     def get_last_message_key(self):
-        """마지막으로 처리한 메시지 키 가져오기"""
+        """마지막으로 처리한 메시지 키 가져오기 (오늘부터 시작)"""
         try:
             with open('last_processed.txt', 'r') as f:
                 return int(f.read().strip())
         except:
+            # 파일이 없으면 오늘 날짜 기준으로 시작
+            today = datetime.now().strftime('%Y/%m/%d')
+            return self.get_today_first_message_key(today)
+    
+    def get_today_first_message_key(self, today_date):
+        """오늘 첫 번째 메시지의 키를 찾기"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # 오늘 날짜의 첫 번째 메시지 키 찾기
+            query = """
+            SELECT MIN(MessageKey) 
+            FROM tbl_recv 
+            WHERE DATE(ReceiveDate) = DATE(?) AND DeletedDate IS NULL
+            """
+            
+            cursor.execute(query, (today_date,))
+            result = cursor.fetchone()[0]
+            conn.close()
+            
+            # 오늘 메시지가 없으면 현재 최대 키 반환 (새 메시지만 처리)
+            if result is None:
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT MAX(MessageKey) FROM tbl_recv")
+                max_key = cursor.fetchone()[0]
+                conn.close()
+                return max_key if max_key else 0
+            
+            return result - 1  # 해당 메시지부터 포함하기 위해 -1
+            
+        except Exception as e:
+            print(f"오늘 메시지 키 조회 오류: {e}")
             return 0
     
     def save_last_message_key(self, message_key):
@@ -113,7 +147,7 @@ class CoolMessengerProcessor:
             return []
     
     def analyze_message_with_ai(self, message_text, sender, title):
-        """OpenAI를 사용하여 메시지 분석"""
+        """OpenAI를 사용하여 메시지 분석 (캘린더 우선)"""
         prompt = f"""
         다음은 한국 학교에서 온 메시지입니다. 이 메시지에서 일정이나 할일을 추출해주세요.
 
@@ -121,33 +155,41 @@ class CoolMessengerProcessor:
         제목: {title}
         내용: {message_text}
 
-        다음 중 하나로 분류하고 반드시 JSON 형식으로만 응답해주세요. 다른 설명은 추가하지 마세요.
+        분류 우선순위:
+        1. CALENDAR 우선: 날짜/시간이 언급되거나 특정 시점의 활동이면 무조건 "calendar"
+        2. 회의, 행사, 수업, 활동, 모임, 시간표 관련 = "calendar"
+        3. 마감일이 있는 과제, 제출물 = "calendar" (마감일을 일정으로)
+        4. 단순 확인, 회신, 준비만 필요한 것 = "todo"
+        5. 공지, 안내만 하는 것 = "info"
 
-        JSON 형식:
+        반드시 JSON 형식으로만 응답하세요:
         {{
             "type": "calendar|todo|info",
             "priority": "high|medium|low",
             "title": "간단한 제목",
             "description": "상세 설명",
-            "date": "YYYY-MM-DD",
+            "date": "2025-MM-DD",
             "time": "HH:MM",
-            "deadline": "YYYY-MM-DD",
+            "deadline": "2025-MM-DD",
             "category": "수업|회의|행사|과제|기타"
         }}
 
-        규칙:
-        1. 회의, 행사, 수업 등 특정 시간에 해야 할 일 = "calendar"
-        2. 과제, 제출물, 준비사항, 회신 등 = "todo"  
-        3. 단순 공지, 정보 전달 = "info"
-        4. 날짜/시간이 없으면 null로 설정
-        5. 반드시 유효한 JSON만 반환
+        날짜 추출 규칙 (현재: 2025년 5월 29일 목요일):
+        - "오늘" = 2025-05-29
+        - "내일" = 2025-05-30  
+        - "금요일", "이번 금요일" = 2025-05-30
+        - "다음주 월요일" = 2025-06-02
+        - "6월 3일" = 2025-06-03
+        - 시간: "오후 2시" = 14:00, "9시 30분" = 09:30
+        
+        중요: 시간/날짜가 조금이라도 언급되면 반드시 "calendar"로 분류하세요!
         """
         
         try:
             response = self.openai_client.chat.completions.create(
-                model="gpt-4.1",
+                model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "당신은 JSON만 반환하는 AI입니다. 설명 없이 오직 JSON 형식으로만 응답하세요."},
+                    {"role": "system", "content": "당신은 JSON만 반환하는 AI입니다. 학교 일정을 캘린더 중심으로 분류하세요."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1
@@ -159,7 +201,15 @@ class CoolMessengerProcessor:
             # JSON 파싱 시도
             try:
                 parsed_result = json.loads(result)
+                
+                # 날짜가 있으면 자동으로 calendar로 변경
+                if parsed_result.get('date') or parsed_result.get('deadline'):
+                    if parsed_result['type'] == 'todo':
+                        parsed_result['type'] = 'calendar'
+                        print("📅 날짜 발견 → 자동으로 캘린더로 변경")
+                
                 return parsed_result
+                
             except json.JSONDecodeError:
                 # JSON 파싱 실패시 텍스트에서 JSON 추출 시도
                 json_start = result.find('{')
@@ -174,14 +224,14 @@ class CoolMessengerProcessor:
             print(f"AI 분석 오류: {e}")
             print(f"응답 내용: {result if 'result' in locals() else 'N/A'}")
             
-            # 오류 발생시 기본값 반환
+            # 오류 발생시 기본값 반환 (캘린더 우선)
             return {
-                "type": "info",
+                "type": "calendar",  # 기본값을 캘린더로 변경
                 "priority": "medium",
                 "title": title[:50] if title else "메시지",
                 "description": message_text[:100] if message_text else "내용 없음",
-                "date": None,
-                "time": None,
+                "date": datetime.now().strftime('%Y-%m-%d'),  # 오늘 날짜 기본값
+                "time": "09:00",  # 기본 시간
                 "deadline": None,
                 "category": "기타"
             }
@@ -258,7 +308,7 @@ class CoolMessengerProcessor:
             if analysis and isinstance(analysis, dict):
                 print(f"✅ AI 분석 결과: {analysis.get('type', 'unknown')} - {analysis.get('title', 'No Title')}")
                 
-                if analysis.get('type') == 'calendar' and analysis.get('date'):
+                if analysis.get('type') == 'calendar':
                     self.add_to_calendar(analysis)
                 elif analysis.get('type') == 'todo':
                     self.add_to_tasks(analysis)
@@ -294,7 +344,7 @@ class DatabaseWatcher(FileSystemEventHandler):
 
 def main():
     # 설정
-    DB_PATH = r"C:\Users\2학년교무부장\AppData\Local\CoolMessenger\Memo\your-coolmessenger-ID.udb"
+    DB_PATH = r"C:\Users\2학년교무부장\AppData\Local\CoolMessenger\Memo\공지전.udb"
     OPENAI_API_KEY = "your-openai-api-key"  # 실제 API 키로 교체
     
     # API 키 확인
@@ -302,6 +352,11 @@ def main():
         print("❌ OpenAI API 키를 설정해주세요!")
         print("OPENAI_API_KEY 변수에 실제 API 키를 입력하세요.")
         return
+    
+    print("=== 쿨메신저 AI 자동화 프로그램 시작 ===")
+    print(f"📅 오늘 ({datetime.now().strftime('%Y-%m-%d')})부터 메시지 처리를 시작합니다.")
+    print("📋 캘린더 우선 모드로 설정되었습니다.")
+    print("-" * 50)
     
     # 프로세서 초기화
     processor = CoolMessengerProcessor(DB_PATH, OPENAI_API_KEY)
